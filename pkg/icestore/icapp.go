@@ -58,8 +58,8 @@ func NewIceStoreServiceWrapper(
 		return nil, fmt.Errorf("failed to create pubsub client: %w", err)
 	}
 
-	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults(cfg.ProjectID)
-	consumerCfg.SubscriptionID = cfg.Consumer.SubscriptionID
+	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults()
+	consumerCfg.SubscriptionID = cfg.InputSubscriptionID
 	consumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, consumerCfg, psClient, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Pub/Sub consumer: %w", err)

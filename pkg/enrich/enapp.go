@@ -16,7 +16,7 @@ import (
 // EnrichmentServiceWrapper wraps the non-generic enrichment pipeline.
 type EnrichmentServiceWrapper[K comparable, V any] struct {
 	*microservice.BaseServer
-	enrichmentService *messagepipeline.EnrichmentService
+	enrichmentService *enrichment.EnrichmentService
 	fetcherCleanup    func() error
 	logger            zerolog.Logger
 }
@@ -67,14 +67,14 @@ func NewEnrichmentServiceWrapperWithClients[K comparable, V any](
 	}
 
 	// 2. Create the pipeline components (consumer and producer).
-	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults(cfg.ProjectID)
-	consumerCfg.SubscriptionID = cfg.Consumer.SubscriptionID
+	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults()
+	consumerCfg.SubscriptionID = cfg.InputSubscriptionID
 	consumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, consumerCfg, psClient, enrichmentLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create consumer: %w", err)
 	}
 
-	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults(cfg.ProjectID, cfg.OutputTopicID)
+	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults()
 	mainProducer, err := messagepipeline.NewGooglePubsubProducer(ctx, producerCfg, psClient, enrichmentLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create producer: %w", err)
@@ -87,10 +87,10 @@ func NewEnrichmentServiceWrapperWithClients[K comparable, V any](
 	}
 
 	// 4. Assemble the final EnrichmentService.
-	enrichmentService, err := messagepipeline.NewEnrichmentService(
-		messagepipeline.EnrichmentServiceConfig{NumWorkers: cfg.NumWorkers},
-		consumer,
+	enrichmentService, err := enrichment.NewEnrichmentService(
+		enrichment.EnrichmentServiceConfig{NumWorkers: cfg.NumWorkers},
 		enricher,
+		consumer,
 		processor,
 		logger,
 	)

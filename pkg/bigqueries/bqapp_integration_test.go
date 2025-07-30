@@ -4,6 +4,7 @@ package bigqueries_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/illmade-knight/go-dataflow-services/pkg/bigqueries"
 	"os"
@@ -59,7 +60,7 @@ func TestBQServiceWrapper_Integration(t *testing.T) {
 	cfg, err := bigqueries.LoadConfigDefaults(projectID)
 	require.NoError(t, err)
 	cfg.HTTPPort = ":0"
-	cfg.Consumer.SubscriptionID = subID
+	cfg.InputSubscriptionID = subID
 	cfg.BigQueryConfig.DatasetID = datasetID
 	cfg.BigQueryConfig.TableID = tableID
 	cfg.ClientConnections = map[string][]option.ClientOption{
@@ -116,7 +117,7 @@ func TestBQServiceWrapper_Integration(t *testing.T) {
 		}
 		var row []bigquery.Value
 		err = it.Next(&row)
-		if err != nil && err != iterator.Done {
+		if err != nil && !errors.Is(err, iterator.Done) {
 			return -1, err
 		}
 		if len(row) == 0 {

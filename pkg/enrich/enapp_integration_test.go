@@ -56,7 +56,7 @@ func TestEnrichmentServiceWrapper_Integration(t *testing.T) {
 	cfg, err := enrich.LoadConfigDefaults(projectID)
 	require.NoError(t, err)
 	cfg.HTTPPort = ":0"
-	cfg.Consumer.SubscriptionID = inputSubID
+	cfg.InputSubscriptionID = inputSubID
 	cfg.OutputTopicID = outputTopicID
 	cfg.CacheConfig.RedisConfig.Addr = redisConn.EmulatorAddress
 	cfg.CacheConfig.FirestoreConfig.CollectionName = "devices"

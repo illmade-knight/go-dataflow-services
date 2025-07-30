@@ -11,11 +11,6 @@ import (
 	"github.com/illmade-knight/go-dataflow/pkg/microservice"
 )
 
-// Consumer defines the configuration for the Pub/Sub subscriber.
-type Consumer struct {
-	SubscriptionID string
-}
-
 // CacheConfig defines settings for metadata caching.
 type CacheConfig struct {
 	RedisConfig       cache.RedisConfig
@@ -26,11 +21,11 @@ type CacheConfig struct {
 // Config holds all configuration for the enrichment microservice.
 type Config struct {
 	microservice.BaseConfig
-	Consumer          Consumer
-	OutputTopicID     string
-	CacheConfig       CacheConfig
-	NumWorkers        int
-	ClientConnections map[string][]option.ClientOption
+	InputSubscriptionID string
+	OutputTopicID       string
+	CacheConfig         CacheConfig
+	NumWorkers          int
+	ClientConnections   map[string][]option.ClientOption
 }
 
 // LoadConfigDefaults initializes and loads configuration.

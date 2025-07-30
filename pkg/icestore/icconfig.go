@@ -11,12 +11,6 @@ import (
 	"google.golang.org/api/option"
 )
 
-// Consumer defines the configuration for the Pub/Sub subscriber.
-type Consumer struct {
-	SubscriptionID  string
-	CredentialsFile string
-}
-
 // IceStore defines configuration specific to Google Cloud Storage (GCS).
 type IceStore struct {
 	CredentialsFile string
@@ -27,11 +21,11 @@ type IceStore struct {
 // Config holds all configuration for the IceStore microservice.
 type Config struct {
 	microservice.BaseConfig
-	Consumer      Consumer
 	IceStore      IceStore
 	PubsubOptions []option.ClientOption
 	GCSOptions    []option.ClientOption
 
+	InputSubscriptionID string
 	// Use the single, correct config from the messagepipeline.
 	BatchProcessing messagepipeline.BatchingServiceConfig
 }

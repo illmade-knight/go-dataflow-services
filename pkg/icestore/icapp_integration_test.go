@@ -49,7 +49,7 @@ func TestIceStoreServiceWrapper_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg.HTTPPort = ":0"
-	cfg.Consumer.SubscriptionID = inputSubID
+	cfg.InputSubscriptionID = inputSubID
 	cfg.IceStore.BucketName = bucketName
 	cfg.IceStore.ObjectPrefix = objectPrefix
 	cfg.PubsubOptions = pubsubConnection.ClientOptions

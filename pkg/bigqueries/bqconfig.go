@@ -11,22 +11,16 @@ import (
 	"google.golang.org/api/option"
 )
 
-// Consumer defines the configuration for the Pub/Sub subscriber.
-type Consumer struct {
-	SubscriptionID  string
-	CredentialsFile string
-}
-
 // Config holds all configuration for the BigQuery batch inserter application.
 type Config struct {
 	microservice.BaseConfig
 	ServiceName        string
 	DataflowName       string
 	ServiceDirectorURL string
-	Consumer           Consumer
 	BigQueryConfig     bqstore.BigQueryDatasetConfig
 	ClientConnections  map[string][]option.ClientOption
 
+	InputSubscriptionID string
 	// Embed the generic batching service config.
 	BatchProcessing messagepipeline.BatchingServiceConfig
 }
@@ -40,7 +34,6 @@ func LoadConfigDefaults(projectID string) (*Config, error) {
 			HTTPPort:  ":8084",
 		},
 	}
-	cfg.BigQueryConfig.ProjectID = projectID
 	// Set defaults for the batching service.
 	cfg.BatchProcessing.NumWorkers = 5
 	cfg.BatchProcessing.BatchSize = 100

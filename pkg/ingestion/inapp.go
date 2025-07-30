@@ -3,6 +3,7 @@ package ingestion
 import (
 	"context"
 	"fmt"
+	"github.com/illmade-knight/go-dataflow/pkg/enrichment"
 	"net/http"
 
 	"cloud.google.com/go/pubsub"
@@ -17,7 +18,7 @@ import (
 type IngestionServiceWrapper struct {
 	*microservice.BaseServer
 	consumer          *mqttconverter.MqttConsumer
-	enrichmentService *messagepipeline.EnrichmentService
+	enrichmentService *enrichment.EnrichmentService
 	logger            zerolog.Logger
 }
 
@@ -26,7 +27,7 @@ func NewIngestionServiceWrapper(
 	ctx context.Context,
 	cfg *Config,
 	logger zerolog.Logger,
-	enricher messagepipeline.MessageEnricher,
+	enricher enrichment.MessageEnricher,
 ) (*IngestionServiceWrapper, error) {
 
 	serviceLogger := logger.With().Str("service", "IngestionService").Logger()
@@ -41,7 +42,7 @@ func NewIngestionServiceWrapper(
 		return nil, fmt.Errorf("failed to create MQTT consumer: %w", err)
 	}
 
-	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults(cfg.ProjectID, cfg.OutputTopicID)
+	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults()
 	producer, err := messagepipeline.NewGooglePubsubProducer(ctx, producerCfg, psClient, serviceLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Google Pub/Sub producer: %w", err)
@@ -54,10 +55,10 @@ func NewIngestionServiceWrapper(
 	}
 
 	// Assemble the new, non-generic EnrichmentService.
-	enrichmentService, err := messagepipeline.NewEnrichmentService(
-		messagepipeline.EnrichmentServiceConfig{NumWorkers: cfg.NumWorkers},
-		consumer,
+	enrichmentService, err := enrichment.NewEnrichmentService(
+		enrichment.EnrichmentServiceConfig{NumWorkers: cfg.NumWorkers},
 		enricher,
+		consumer,
 		processor,
 		serviceLogger,
 	)
@@ -99,7 +100,6 @@ func (s *IngestionServiceWrapper) Shutdown(ctx context.Context) error {
 	return s.BaseServer.Shutdown(ctx)
 }
 
-// ... (Mux, GetHTTPPort, registerHandlers, readinessCheck methods are unchanged) ...
 func (s *IngestionServiceWrapper) Mux() *http.ServeMux {
 	return s.BaseServer.Mux()
 }
@@ -110,7 +110,7 @@ func (s *IngestionServiceWrapper) registerHandlers() {
 	mux := s.Mux()
 	mux.HandleFunc("/readyz", s.readinessCheck)
 }
-func (s *IngestionServiceWrapper) readinessCheck(w http.ResponseWriter, r *http.Request) {
+func (s *IngestionServiceWrapper) readinessCheck(w http.ResponseWriter, _ *http.Request) {
 	if s.consumer.IsConnected() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("READY"))
