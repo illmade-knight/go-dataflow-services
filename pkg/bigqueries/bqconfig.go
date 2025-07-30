@@ -41,7 +41,6 @@ func LoadConfigDefaults(projectID string) (*Config, error) {
 		},
 	}
 	cfg.BigQueryConfig.ProjectID = projectID
-
 	// Set defaults for the batching service.
 	cfg.BatchProcessing.NumWorkers = 5
 	cfg.BatchProcessing.BatchSize = 100

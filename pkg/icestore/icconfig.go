@@ -27,13 +27,10 @@ type IceStore struct {
 // Config holds all configuration for the IceStore microservice.
 type Config struct {
 	microservice.BaseConfig
-	ServiceName        string
-	DataflowName       string
-	ServiceDirectorURL string
-	Consumer           Consumer
-	IceStore           IceStore
-	PubsubOptions      []option.ClientOption
-	GCSOptions         []option.ClientOption
+	Consumer      Consumer
+	IceStore      IceStore
+	PubsubOptions []option.ClientOption
+	GCSOptions    []option.ClientOption
 
 	// Use the single, correct config from the messagepipeline.
 	BatchProcessing messagepipeline.BatchingServiceConfig

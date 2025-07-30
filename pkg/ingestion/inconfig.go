@@ -22,15 +22,14 @@ type Config struct {
 }
 
 // LoadConfigDefaults initializes and loads configuration.
-func LoadConfigDefaults(projectID, outputTopicID string) (*Config, error) {
+func LoadConfigDefaults(projectID string) (*Config, error) {
 	cfg := &Config{
 		BaseConfig: microservice.BaseConfig{
 			ProjectID: projectID,
 			LogLevel:  "debug",
 			HTTPPort:  ":8081",
 		},
-		OutputTopicID: outputTopicID,
-		NumWorkers:    20,
+		NumWorkers: 20,
 	}
 
 	mqttCfg := mqttconverter.LoadMQTTClientConfigFromEnv()
