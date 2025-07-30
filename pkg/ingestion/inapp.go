@@ -43,6 +43,7 @@ func NewIngestionServiceWrapper(
 	}
 
 	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults()
+	producerCfg.TopicID = cfg.OutputTopicID
 	producer, err := messagepipeline.NewGooglePubsubProducer(ctx, producerCfg, psClient, serviceLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Google Pub/Sub producer: %w", err)

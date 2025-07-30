@@ -75,6 +75,7 @@ func NewEnrichmentServiceWrapperWithClients[K comparable, V any](
 	}
 
 	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults()
+	producerCfg.TopicID = cfg.OutputTopicID
 	mainProducer, err := messagepipeline.NewGooglePubsubProducer(ctx, producerCfg, psClient, enrichmentLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create producer: %w", err)
