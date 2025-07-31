@@ -20,6 +20,7 @@ type IngestionServiceWrapper struct {
 	consumer          *mqttconverter.MqttConsumer
 	enrichmentService *enrichment.EnrichmentService
 	logger            zerolog.Logger
+	pubsubClient      *pubsub.Client
 }
 
 // NewIngestionServiceWrapper assembles the full ingestion pipeline.
@@ -74,6 +75,7 @@ func NewIngestionServiceWrapper(
 		consumer:          consumer,
 		enrichmentService: enrichmentService,
 		logger:            serviceLogger,
+		pubsubClient:      psClient,
 	}
 
 	serviceWrapper.registerHandlers()
@@ -98,6 +100,14 @@ func (s *IngestionServiceWrapper) Shutdown(ctx context.Context) error {
 	} else {
 		s.logger.Info().Msg("Core enrichment service stopped.")
 	}
+
+	// Close the pubsub client to release gRPC connections.
+	if s.pubsubClient != nil {
+		if err := s.pubsubClient.Close(); err != nil {
+			s.logger.Error().Err(err).Msg("Failed to close pubsub client.")
+		}
+	}
+
 	return s.BaseServer.Shutdown(ctx)
 }
 

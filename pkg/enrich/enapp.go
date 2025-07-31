@@ -19,6 +19,7 @@ type EnrichmentServiceWrapper[K comparable, V any] struct {
 	enrichmentService *enrichment.EnrichmentService
 	fetcher           cache.Fetcher[K, V]
 	logger            zerolog.Logger
+	pubsubClient      *pubsub.Client
 }
 
 // NewEnrichmentServiceWrapper creates the service with an injected Fetcher and a pipeline-aware enricher.
@@ -87,10 +88,11 @@ func NewEnrichmentServiceWrapper[K comparable, V any](
 		enrichmentService: enrichmentService,
 		fetcher:           fetcher,
 		logger:            enrichmentLogger,
+		pubsubClient:      psClient,
 	}, nil
 }
 
-// ... Start and Shutdown methods remain the same ...
+// Start initiates the processing service and the embedded HTTP server.
 func (s *EnrichmentServiceWrapper[K, V]) Start(ctx context.Context) error {
 	s.logger.Info().Msg("Starting enrichment server components...")
 	if err := s.enrichmentService.Start(ctx); err != nil {
@@ -100,6 +102,7 @@ func (s *EnrichmentServiceWrapper[K, V]) Start(ctx context.Context) error {
 	return s.BaseServer.Start()
 }
 
+// Shutdown gracefully stops the processing service, closes the fetcher, and the HTTP server.
 func (s *EnrichmentServiceWrapper[K, V]) Shutdown(ctx context.Context) error {
 	s.logger.Info().Msg("Shutting down enrichment server components...")
 	if err := s.enrichmentService.Stop(ctx); err != nil {
@@ -113,5 +116,13 @@ func (s *EnrichmentServiceWrapper[K, V]) Shutdown(ctx context.Context) error {
 			s.logger.Error().Err(err).Msg("Error during fetcher cleanup")
 		}
 	}
+
+	// Close the pubsub client to release gRPC connections.
+	if s.pubsubClient != nil {
+		if err := s.pubsubClient.Close(); err != nil {
+			s.logger.Error().Err(err).Msg("Failed to close pubsub client.")
+		}
+	}
+
 	return s.BaseServer.Shutdown(ctx)
 }
