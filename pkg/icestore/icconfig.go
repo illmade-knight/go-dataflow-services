@@ -33,7 +33,6 @@ func LoadConfigDefaults(projectID string) *Config {
 		BaseConfig: microservice.BaseConfig{
 			ProjectID: projectID,
 			LogLevel:  "debug",
-			HTTPPort:  ":8083",
 		},
 		ServiceConfig: icestore.IceStorageServiceConfig{
 			NumWorkers:    5,

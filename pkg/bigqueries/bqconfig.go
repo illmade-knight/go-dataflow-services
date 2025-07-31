@@ -29,7 +29,6 @@ func LoadConfigDefaults(projectID string) *Config {
 		BaseConfig: microservice.BaseConfig{
 			ProjectID: projectID,
 			LogLevel:  "debug",
-			HTTPPort:  ":8084",
 		},
 		BatchProcessing: messagepipeline.BatchingServiceConfig{
 			NumWorkers:    5,
