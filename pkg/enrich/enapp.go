@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"cloud.google.com/go/firestore"
 	"cloud.google.com/go/pubsub"
-	"github.com/illmade-knight/go-dataflow/pkg/cache"
 	"github.com/illmade-knight/go-dataflow/pkg/enrichment"
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
 	"github.com/illmade-knight/go-dataflow/pkg/microservice"
@@ -21,50 +19,24 @@ type EnrichmentServiceWrapper[K comparable, V any] struct {
 	logger            zerolog.Logger
 }
 
-// NewEnrichmentServiceWrapperWithClients creates the service with injected clients for testability.
-func NewEnrichmentServiceWrapperWithClients[K comparable, V any](
+// NewEnrichmentServiceWrapper creates the service with injected clients for testability.
+func NewEnrichmentServiceWrapper[K comparable, V any](
 	ctx context.Context,
 	cfg *Config,
 	logger zerolog.Logger,
-	psClient *pubsub.Client,
-	fsClient *firestore.Client,
+	fetcher enrichment.CacheFetcher[K, V],
 	keyExtractor enrichment.KeyExtractor[K],
 	applier enrichment.Applier[V],
 ) (wrapper *EnrichmentServiceWrapper[K, V], err error) {
 	enrichmentLogger := logger.With().Str("component", "EnrichmentServiceApp").Logger()
 
-	var fetcherCleanup func() error
-	defer func() {
-		if err != nil && fetcherCleanup != nil {
-			_ = fetcherCleanup()
-		}
-	}()
-
-	sourceFetcher, err := cache.NewFirestoreSource[K, V](cfg.CacheConfig.FirestoreConfig, fsClient, enrichmentLogger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Firestore source fetcher: %w", err)
-	}
-
-	fetcher := enrichment.Fetcher[K, V](sourceFetcher.Fetch)
-	fetcherCleanup = sourceFetcher.Close
-
-	if cfg.CacheConfig.RedisConfig.Addr != "" {
-		redisCache, err := cache.NewRedisCache[K, V](ctx, &cfg.CacheConfig.RedisConfig, enrichmentLogger)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create redis cache layer: %w", err)
-		}
-		fetcherCfg := &enrichment.FetcherConfig{CacheWriteTimeout: cfg.CacheConfig.CacheWriteTimeout}
-		fetcher, fetcherCleanup, err = enrichment.NewCacheFallbackFetcher[K, V](fetcherCfg, redisCache, sourceFetcher, enrichmentLogger)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create cache fallback fetcher: %w", err)
-		}
-	}
-
 	// 1. Create the MessageEnricher function using the enrichment library.
-	enricher, err := enrichment.NewEnricherFunc(fetcher, keyExtractor, applier, enrichmentLogger)
+	enricher, err := enrichment.NewEnricherFunc(fetcher.Fetch, keyExtractor, applier, enrichmentLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create enricher function: %w", err)
 	}
+
+	psClient, err := pubsub.NewClient(ctx, cfg.ProjectID, cfg.ClientConnections["pubsub"]...)
 
 	// 2. Create the pipeline components (consumer and producer).
 	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults()
@@ -103,7 +75,6 @@ func NewEnrichmentServiceWrapperWithClients[K comparable, V any](
 	return &EnrichmentServiceWrapper[K, V]{
 		BaseServer:        baseServer,
 		enrichmentService: enrichmentService,
-		fetcherCleanup:    fetcherCleanup,
 		logger:            enrichmentLogger,
 	}, nil
 }
