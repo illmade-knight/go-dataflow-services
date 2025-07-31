@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"cloud.google.com/go/pubsub"
+	"github.com/illmade-knight/go-dataflow/pkg/cache"
 	"github.com/illmade-knight/go-dataflow/pkg/enrichment"
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
 	"github.com/illmade-knight/go-dataflow/pkg/microservice"
@@ -15,28 +16,32 @@ import (
 type EnrichmentServiceWrapper[K comparable, V any] struct {
 	*microservice.BaseServer
 	enrichmentService *enrichment.EnrichmentService
-	fetcherCleanup    func() error
+	fetcher           cache.Fetcher[K, V]
 	logger            zerolog.Logger
 }
 
-// NewEnrichmentServiceWrapper creates the service with injected clients for testability.
+// NewEnrichmentServiceWrapper creates the service with an injected Fetcher for testability.
 func NewEnrichmentServiceWrapper[K comparable, V any](
 	ctx context.Context,
 	cfg *Config,
 	logger zerolog.Logger,
-	fetcher enrichment.CacheFetcher[K, V],
+	fetcher cache.Fetcher[K, V],
 	keyExtractor enrichment.KeyExtractor[K],
 	applier enrichment.Applier[V],
 ) (wrapper *EnrichmentServiceWrapper[K, V], err error) {
 	enrichmentLogger := logger.With().Str("component", "EnrichmentServiceApp").Logger()
 
 	// 1. Create the MessageEnricher function using the enrichment library.
+	// We pass the Fetch method from our canonical cache.Fetcher interface.
 	enricher, err := enrichment.NewEnricherFunc(fetcher.Fetch, keyExtractor, applier, enrichmentLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create enricher function: %w", err)
 	}
 
 	psClient, err := pubsub.NewClient(ctx, cfg.ProjectID, cfg.ClientConnections["pubsub"]...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create pubsub client: %w", err)
+	}
 
 	// 2. Create the pipeline components (consumer and producer).
 	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults()
@@ -75,6 +80,7 @@ func NewEnrichmentServiceWrapper[K comparable, V any](
 	return &EnrichmentServiceWrapper[K, V]{
 		BaseServer:        baseServer,
 		enrichmentService: enrichmentService,
+		fetcher:           fetcher,
 		logger:            enrichmentLogger,
 	}, nil
 }
@@ -89,7 +95,7 @@ func (s *EnrichmentServiceWrapper[K, V]) Start(ctx context.Context) error {
 	return s.BaseServer.Start()
 }
 
-// Shutdown gracefully stops the processing service and the HTTP server.
+// Shutdown gracefully stops the processing service, closes the fetcher, and the HTTP server.
 func (s *EnrichmentServiceWrapper[K, V]) Shutdown(ctx context.Context) error {
 	s.logger.Info().Msg("Shutting down enrichment server components...")
 	if err := s.enrichmentService.Stop(ctx); err != nil {
@@ -98,8 +104,8 @@ func (s *EnrichmentServiceWrapper[K, V]) Shutdown(ctx context.Context) error {
 		s.logger.Info().Msg("Data processing service stopped.")
 	}
 
-	if s.fetcherCleanup != nil {
-		if err := s.fetcherCleanup(); err != nil {
+	if s.fetcher != nil {
+		if err := s.fetcher.Close(); err != nil {
 			s.logger.Error().Err(err).Msg("Error during fetcher cleanup")
 		}
 	}

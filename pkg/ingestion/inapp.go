@@ -37,7 +37,7 @@ func NewIngestionServiceWrapper(
 		return nil, fmt.Errorf("failed to create pubsub client: %w", err)
 	}
 
-	consumer, err := mqttconverter.NewMqttConsumer(&cfg.MQTT, serviceLogger)
+	consumer, err := mqttconverter.NewMqttConsumer(&cfg.MQTT, serviceLogger, cfg.BufferSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create MQTT consumer: %w", err)
 	}

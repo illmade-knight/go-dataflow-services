@@ -1,8 +1,6 @@
 package enrich
 
 import (
-	"flag"
-	"os"
 	"time"
 
 	"google.golang.org/api/option"
@@ -29,7 +27,7 @@ type Config struct {
 }
 
 // LoadConfigDefaults initializes and loads configuration.
-func LoadConfigDefaults(projectID string) (*Config, error) {
+func LoadConfigDefaults(projectID string) *Config {
 	cfg := &Config{
 		BaseConfig: microservice.BaseConfig{
 			ProjectID: projectID,
@@ -48,13 +46,5 @@ func LoadConfigDefaults(projectID string) (*Config, error) {
 		NumWorkers: 5,
 	}
 
-	flag.StringVar(&cfg.CacheConfig.RedisConfig.Addr, "cache.redis.addr", cfg.CacheConfig.RedisConfig.Addr, "Redis address")
-	flag.IntVar(&cfg.NumWorkers, "num-workers", cfg.NumWorkers, "Number of message processing workers")
-	flag.Parse()
-
-	if port := os.Getenv("PORT"); port != "" {
-		cfg.HTTPPort = ":" + port
-	}
-
-	return cfg, nil
+	return cfg
 }

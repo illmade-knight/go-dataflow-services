@@ -1,10 +1,6 @@
 package ingestion
 
 import (
-	"flag"
-	"os"
-	"strconv"
-
 	"google.golang.org/api/option"
 
 	"github.com/illmade-knight/go-dataflow/pkg/microservice"
@@ -19,10 +15,11 @@ type Config struct {
 	MQTT          mqttconverter.MQTTClientConfig
 	OutputTopicID string
 	NumWorkers    int
+	BufferSize    int
 }
 
 // LoadConfigDefaults initializes and loads configuration.
-func LoadConfigDefaults(projectID string) (*Config, error) {
+func LoadConfigDefaults(projectID string) *Config {
 	cfg := &Config{
 		BaseConfig: microservice.BaseConfig{
 			ProjectID: projectID,
@@ -30,21 +27,11 @@ func LoadConfigDefaults(projectID string) (*Config, error) {
 			HTTPPort:  ":8081",
 		},
 		NumWorkers: 20,
+		BufferSize: 1000,
 	}
 
 	mqttCfg := mqttconverter.LoadMQTTClientConfigFromEnv()
 	cfg.MQTT = *mqttCfg
 
-	flag.IntVar(&cfg.NumWorkers, "num-workers", cfg.NumWorkers, "Number of concurrent processing workers")
-	flag.Parse()
-
-	if workers := os.Getenv("INGESTION_NUM_WORKERS"); workers != "" {
-		if val, err := strconv.Atoi(workers); err == nil && val > 0 {
-			cfg.NumWorkers = val
-		}
-	}
-	if port := os.Getenv("PORT"); port != "" {
-		cfg.HTTPPort = ":" + port
-	}
-	return cfg, nil
+	return cfg
 }

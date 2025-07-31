@@ -57,8 +57,7 @@ func TestBQServiceWrapper_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// --- 3. Create Test Configuration ---
-	cfg, err := bigqueries.LoadConfigDefaults(projectID)
-	require.NoError(t, err)
+	cfg := bigqueries.LoadConfigDefaults(projectID)
 	cfg.HTTPPort = ":0"
 	cfg.InputSubscriptionID = subID
 	cfg.BigQueryConfig.DatasetID = datasetID

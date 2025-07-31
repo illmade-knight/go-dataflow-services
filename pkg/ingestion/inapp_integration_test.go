@@ -30,8 +30,7 @@ func TestIngestionServiceWrapper_Integration(t *testing.T) {
 	pubsubConnection := emulators.SetupPubsubEmulator(t, ctx, emulators.GetDefaultPubsubConfig("test-project", map[string]string{"ingestion-output-topic": "ingestion-verifier-sub"}))
 
 	projectID := "test-project"
-	cfg, err := LoadConfigDefaults(projectID)
-	require.NoError(t, err)
+	cfg := LoadConfigDefaults(projectID)
 
 	cfg.HTTPPort = ":0"
 	cfg.MQTT.BrokerURL = mqttConnection.EmulatorAddress
@@ -39,6 +38,7 @@ func TestIngestionServiceWrapper_Integration(t *testing.T) {
 	cfg.OutputTopicID = "ingestion-output-topic"
 	//we don't need so many workers for our integration test
 	cfg.NumWorkers = 3
+	cfg.BufferSize = 10
 	cfg.PubsubOptions = pubsubConnection.ClientOptions
 
 	// The transformer is now a MessageEnricher: it modifies the message in-place.

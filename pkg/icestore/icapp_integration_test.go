@@ -7,13 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/illmade-knight/go-dataflow-services/pkg/icestore"
 	"os"
 	"testing"
 	"time"
 
 	"cloud.google.com/go/pubsub"
 	"cloud.google.com/go/storage"
+	"github.com/illmade-knight/go-dataflow-services/pkg/icestore"
 	"github.com/illmade-knight/go-test/emulators"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
@@ -45,8 +45,7 @@ func TestIceStoreServiceWrapper_Integration(t *testing.T) {
 	gcsConnection := emulators.SetupGCSEmulator(t, ctx, emulators.GetDefaultGCSConfig(projectID, bucketName))
 
 	// --- 2. Create Test Configuration ---
-	cfg, err := icestore.LoadConfigDefaults(projectID)
-	require.NoError(t, err)
+	cfg := icestore.LoadConfigDefaults(projectID)
 
 	cfg.HTTPPort = ":0"
 	cfg.InputSubscriptionID = inputSubID
@@ -54,9 +53,10 @@ func TestIceStoreServiceWrapper_Integration(t *testing.T) {
 	cfg.IceStore.ObjectPrefix = objectPrefix
 	cfg.PubsubOptions = pubsubConnection.ClientOptions
 	cfg.GCSOptions = gcsConnection.ClientOptions
-	cfg.BatchProcessing.BatchSize = 5
-	cfg.BatchProcessing.NumWorkers = 2
-	cfg.BatchProcessing.FlushInterval = time.Second
+	// Use the corrected config field for our test values
+	cfg.ServiceConfig.BatchSize = 5
+	cfg.ServiceConfig.NumWorkers = 2
+	cfg.ServiceConfig.FlushInterval = time.Second
 
 	// --- 3. Create and Start the Service ---
 	wrapper, err := icestore.NewIceStoreServiceWrapper(ctx, cfg, logger)

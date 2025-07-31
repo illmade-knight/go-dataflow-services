@@ -1,12 +1,9 @@
 package icestore
 
 import (
-	"flag"
-	"github.com/illmade-knight/go-dataflow-services/pkg"
-	"os"
 	"time"
 
-	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
+	"github.com/illmade-knight/go-dataflow/pkg/icestore"
 	"github.com/illmade-knight/go-dataflow/pkg/microservice"
 	"google.golang.org/api/option"
 )
@@ -26,35 +23,24 @@ type Config struct {
 	GCSOptions    []option.ClientOption
 
 	InputSubscriptionID string
-	// Use the single, correct config from the messagepipeline.
-	BatchProcessing messagepipeline.BatchingServiceConfig
+	// Use the specific config for the IceStorageService.
+	ServiceConfig icestore.IceStorageServiceConfig
 }
 
 // LoadConfigDefaults initializes and loads configuration.
-func LoadConfigDefaults(projectID string) (*Config, error) {
+func LoadConfigDefaults(projectID string) *Config {
 	cfg := &Config{
 		BaseConfig: microservice.BaseConfig{
 			ProjectID: projectID,
 			LogLevel:  "debug",
 			HTTPPort:  ":8083",
 		},
-	}
-	cfg.BatchProcessing.NumWorkers = 5
-	cfg.BatchProcessing.BatchSize = 100
-	cfg.BatchProcessing.FlushInterval = 1 * time.Minute
-
-	flag.IntVar(&cfg.BatchProcessing.NumWorkers, "batch.num-workers", cfg.BatchProcessing.NumWorkers, "Number of processing workers")
-	flag.IntVar(&cfg.BatchProcessing.BatchSize, "batch.size", cfg.BatchProcessing.BatchSize, "GCS batch write size")
-	flag.DurationVar(&cfg.BatchProcessing.FlushInterval, "batch.flush-interval", cfg.BatchProcessing.FlushInterval, "GCS batch flush interval")
-	flag.Parse()
-
-	pkg.OverrideWithIntEnvVar("APP_BATCH_NUM_WORKERS", &cfg.BatchProcessing.NumWorkers)
-	pkg.OverrideWithIntEnvVar("APP_BATCH_SIZE", &cfg.BatchProcessing.BatchSize)
-	pkg.OverrideWithDurationEnvVar("APP_BATCH_FLUSH_INTERVAL", &cfg.BatchProcessing.FlushInterval)
-
-	if port := os.Getenv("PORT"); port != "" {
-		cfg.HTTPPort = ":" + port
+		ServiceConfig: icestore.IceStorageServiceConfig{
+			NumWorkers:    5,
+			BatchSize:     100,
+			FlushInterval: time.Minute,
+		},
 	}
 
-	return cfg, nil
+	return cfg
 }

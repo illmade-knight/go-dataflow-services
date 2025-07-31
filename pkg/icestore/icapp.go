@@ -17,7 +17,7 @@ import (
 // IceStoreServiceWrapper wraps the IceStorageService for a common interface.
 type IceStoreServiceWrapper struct {
 	*microservice.BaseServer
-	processingService *messagepipeline.BatchingService[icestore.ArchivalData]
+	processingService *icestore.IceStorageService // Corrected type
 	pubsubClient      *pubsub.Client
 	gcsClient         *storage.Client
 	logger            zerolog.Logger
@@ -70,9 +70,8 @@ func NewIceStoreServiceWrapper(
 		ObjectPrefix: cfg.IceStore.ObjectPrefix,
 	}
 
-	// Call the correct, final version of the icestore service constructor.
 	processingService, err := icestore.NewIceStorageService(
-		cfg.BatchProcessing,
+		cfg.ServiceConfig, // Use the corrected config field
 		consumer,
 		icestore.NewGCSClientAdapter(gcsClient),
 		uploaderCfg,

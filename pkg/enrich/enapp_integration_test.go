@@ -7,10 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/illmade-knight/go-dataflow-services/pkg/enrich"
-	"github.com/illmade-knight/go-dataflow/pkg/cache"
-	"github.com/illmade-knight/go-dataflow/pkg/enrichment"
-	"google.golang.org/api/option"
 	"os"
 	"testing"
 	"time"
@@ -18,11 +14,14 @@ import (
 	"cloud.google.com/go/firestore"
 	"cloud.google.com/go/pubsub"
 	"github.com/google/uuid"
+	"github.com/illmade-knight/go-dataflow-services/pkg/enrich"
+	"github.com/illmade-knight/go-dataflow/pkg/cache"
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
 	"github.com/illmade-knight/go-test/emulators"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/api/option"
 )
 
 func TestEnrichmentServiceWrapper_Integration(t *testing.T) {
@@ -56,16 +55,14 @@ func TestEnrichmentServiceWrapper_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// --- 3. Configure the Service Wrapper ---
-	cfg, err := enrich.LoadConfigDefaults(projectID)
-	require.NoError(t, err)
+	cfg := enrich.LoadConfigDefaults(projectID)
 	cfg.HTTPPort = ":0"
 	cfg.InputSubscriptionID = inputSubID
 	cfg.OutputTopicID = outputTopicID
 	cfg.CacheConfig.RedisConfig.Addr = redisConn.EmulatorAddress
 	cfg.CacheConfig.FirestoreConfig.CollectionName = "devices"
 	cfg.ClientConnections = map[string][]option.ClientOption{
-		"firestore": firestoreConn.ClientOptions,
-		"pubsub":    pubsubConn.ClientOptions,
+		"pubsub": pubsubConn.ClientOptions,
 	}
 
 	// --- 4. Setup Pub/Sub Resources ---
@@ -80,14 +77,18 @@ func TestEnrichmentServiceWrapper_Integration(t *testing.T) {
 	outputTopic, err := psClient.CreateTopic(testContext, outputTopicID)
 	require.NoError(t, err)
 
-	fetcher, err := GetFetcher[string, DeviceInfo](testContext, cfg.CacheConfig, fsClient, logger)
+	// --- 5. Assemble the Fetcher using the Decorator Pattern ---
+	// Create the source of truth fetcher (Firestore).
+	firestoreFetcher, err := cache.NewFirestore[string, DeviceInfo](testContext, cfg.CacheConfig.FirestoreConfig, fsClient, logger)
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = fetcher.Close()
-	})
 
-	// --- 5. Create and Start the Service Wrapper ---
-	wrapper, err := enrich.NewEnrichmentServiceWrapper[string, DeviceInfo](testContext, cfg, logger, fetcher, BasicKeyExtractor, DeviceApplier)
+	// Create the caching fetcher, decorating the Firestore fetcher.
+	redisFetcher, err := cache.NewRedisCache[string, DeviceInfo](testContext, &cfg.CacheConfig.RedisConfig, logger, firestoreFetcher)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = redisFetcher.Close() })
+
+	// --- 6. Create and Start the Service Wrapper ---
+	wrapper, err := enrich.NewEnrichmentServiceWrapper[string, DeviceInfo](testContext, cfg, logger, redisFetcher, BasicKeyExtractor, DeviceApplier)
 	require.NoError(t, err)
 
 	serviceCtx, serviceCancel := context.WithCancel(testContext)
@@ -103,7 +104,7 @@ func TestEnrichmentServiceWrapper_Integration(t *testing.T) {
 		_ = wrapper.Shutdown(shutdownCtx)
 	})
 
-	// --- 6. Run Test ---
+	// --- 7. Run Test ---
 	t.Run("Successful Enrichment", func(t *testing.T) {
 		verifierSub, err := psClient.CreateSubscription(testContext, "verifier-sub-ok", pubsub.SubscriptionConfig{Topic: outputTopic})
 		require.NoError(t, err)
@@ -123,25 +124,7 @@ func TestEnrichmentServiceWrapper_Integration(t *testing.T) {
 
 		assert.JSONEq(t, originalPayload, string(result.Payload))
 		require.NotNil(t, result.EnrichmentData)
-		// Note: json.Unmarshal converts numbers to float64 by default
 		assert.Equal(t, testDeviceData.ClientID, result.EnrichmentData["name"])
 		assert.Equal(t, testDeviceData.LocationID, result.EnrichmentData["location"])
 	})
-}
-
-func GetFetcher[K comparable, V any](ctx context.Context, cfg enrich.CacheConfig, fsClient *firestore.Client, enrichmentLogger zerolog.Logger) (enrichment.CacheFetcher[K, V], error) {
-
-	sourceFetcher, err := cache.NewFirestoreSource[K, V](cfg.FirestoreConfig, fsClient, enrichmentLogger)
-	if err != nil {
-		return nil, err
-	}
-	redisCache, err := cache.NewRedisCache[K, V](ctx, &cfg.RedisConfig, enrichmentLogger)
-	if err != nil {
-		return nil, err
-	}
-
-	fetcherCfg := &enrichment.FetcherConfig{CacheWriteTimeout: cfg.CacheWriteTimeout}
-	fetcher := enrichment.NewCacheFallbackFetcher[K, V](fetcherCfg, redisCache, sourceFetcher, enrichmentLogger)
-
-	return fetcher, err
 }
