@@ -78,16 +78,15 @@ func TestEnrichmentServiceWrapper_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// --- 5. Assemble the Fetcher using the Decorator Pattern ---
-	// Create the source of truth fetcher (Firestore).
 	firestoreFetcher, err := cache.NewFirestore[string, DeviceInfo](testContext, cfg.CacheConfig.FirestoreConfig, fsClient, logger)
 	require.NoError(t, err)
-
-	// Create the caching fetcher, decorating the Firestore fetcher.
 	redisFetcher, err := cache.NewRedisCache[string, DeviceInfo](testContext, &cfg.CacheConfig.RedisConfig, logger, firestoreFetcher)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = redisFetcher.Close() })
 
 	// --- 6. Create and Start the Service Wrapper ---
+	// The constructor internally creates the pipeline-aware composite enricher.
+	// We only need to provide the main key extractor and applier functions.
 	wrapper, err := enrich.NewEnrichmentServiceWrapper[string, DeviceInfo](testContext, cfg, logger, redisFetcher, BasicKeyExtractor, DeviceApplier)
 	require.NoError(t, err)
 
@@ -110,8 +109,21 @@ func TestEnrichmentServiceWrapper_Integration(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = verifierSub.Delete(testContext) })
 
-		originalPayload := `{"value": 42}`
-		res := inputTopic.Publish(testContext, &pubsub.Message{Data: []byte(originalPayload), Attributes: map[string]string{"uid": testDeviceID}})
+		// To test the service's default pipeline-aware behavior, we must send it a message
+		// in the format it expects from an upstream service (like the ingestion service).
+		originalPayload := []byte(`{"value": 42}`)
+		upstreamMessage := messagepipeline.MessageData{
+			ID:      "test-upstream-id",
+			Payload: originalPayload,
+			EnrichmentData: map[string]interface{}{
+				"DeviceID": testDeviceID, // This is the key the robust BasicKeyExtractor will find.
+			},
+		}
+		wrappedPayload, err := json.Marshal(upstreamMessage)
+		require.NoError(t, err)
+
+		// We publish the wrapped payload. The service is expected to unwrap it.
+		res := inputTopic.Publish(testContext, &pubsub.Message{Data: wrappedPayload})
 		_, err = res.Get(testContext)
 		require.NoError(t, err)
 
@@ -122,9 +134,13 @@ func TestEnrichmentServiceWrapper_Integration(t *testing.T) {
 		err = json.Unmarshal(receivedMsg.Data, &result)
 		require.NoError(t, err)
 
-		assert.JSONEq(t, originalPayload, string(result.Payload))
+		// Assert that the final payload is the original, unwrapped payload.
+		assert.JSONEq(t, string(originalPayload), string(result.Payload))
 		require.NotNil(t, result.EnrichmentData)
+		// Assert that the NEW enrichment data has been added.
 		assert.Equal(t, testDeviceData.ClientID, result.EnrichmentData["name"])
 		assert.Equal(t, testDeviceData.LocationID, result.EnrichmentData["location"])
+		// Assert that the OLD enrichment data is still present.
+		assert.Equal(t, testDeviceID, result.EnrichmentData["DeviceID"])
 	})
 }

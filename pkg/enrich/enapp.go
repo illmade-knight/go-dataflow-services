@@ -2,6 +2,7 @@ package enrich
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"cloud.google.com/go/pubsub"
@@ -20,7 +21,7 @@ type EnrichmentServiceWrapper[K comparable, V any] struct {
 	logger            zerolog.Logger
 }
 
-// NewEnrichmentServiceWrapper creates the service with an injected Fetcher for testability.
+// NewEnrichmentServiceWrapper creates the service with an injected Fetcher and a pipeline-aware enricher.
 func NewEnrichmentServiceWrapper[K comparable, V any](
 	ctx context.Context,
 	cfg *Config,
@@ -31,11 +32,18 @@ func NewEnrichmentServiceWrapper[K comparable, V any](
 ) (wrapper *EnrichmentServiceWrapper[K, V], err error) {
 	enrichmentLogger := logger.With().Str("component", "EnrichmentServiceApp").Logger()
 
-	// 1. Create the MessageEnricher function using the enrichment library.
-	// We pass the Fetch method from our canonical cache.Fetcher interface.
-	enricher, err := enrichment.NewEnricherFunc(fetcher.Fetch, keyExtractor, applier, enrichmentLogger)
+	mainEnricher, err := enrichment.NewEnricherFunc(fetcher.Fetch, keyExtractor, applier, enrichmentLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create enricher function: %w", err)
+	}
+
+	compositeEnricher := func(ctx context.Context, msg *messagepipeline.Message) (bool, error) {
+		var upstreamMessageData messagepipeline.MessageData
+		if err := json.Unmarshal(msg.Payload, &upstreamMessageData); err == nil {
+			msg.MessageData = upstreamMessageData
+			enrichmentLogger.Debug().Str("msg_id", msg.ID).Msg("Unwrapped upstream message data.")
+		}
+		return mainEnricher(ctx, msg)
 	}
 
 	psClient, err := pubsub.NewClient(ctx, cfg.ProjectID, cfg.ClientConnections["pubsub"]...)
@@ -43,7 +51,6 @@ func NewEnrichmentServiceWrapper[K comparable, V any](
 		return nil, fmt.Errorf("failed to create pubsub client: %w", err)
 	}
 
-	// 2. Create the pipeline components (consumer and producer).
 	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults()
 	consumerCfg.SubscriptionID = cfg.InputSubscriptionID
 	consumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, consumerCfg, psClient, enrichmentLogger)
@@ -58,16 +65,14 @@ func NewEnrichmentServiceWrapper[K comparable, V any](
 		return nil, fmt.Errorf("failed to create producer: %w", err)
 	}
 
-	// 3. Define the MessageProcessor function that publishes the enriched message.
 	processor := func(ctx context.Context, msg *messagepipeline.Message) error {
 		_, err := mainProducer.Publish(ctx, msg.MessageData)
 		return err
 	}
 
-	// 4. Assemble the final EnrichmentService.
 	enrichmentService, err := enrichment.NewEnrichmentService(
 		enrichment.EnrichmentServiceConfig{NumWorkers: cfg.NumWorkers},
-		enricher,
+		compositeEnricher,
 		consumer,
 		processor,
 		logger,
@@ -85,7 +90,7 @@ func NewEnrichmentServiceWrapper[K comparable, V any](
 	}, nil
 }
 
-// Start initiates the processing service and the embedded HTTP server.
+// ... Start and Shutdown methods remain the same ...
 func (s *EnrichmentServiceWrapper[K, V]) Start(ctx context.Context) error {
 	s.logger.Info().Msg("Starting enrichment server components...")
 	if err := s.enrichmentService.Start(ctx); err != nil {
@@ -95,7 +100,6 @@ func (s *EnrichmentServiceWrapper[K, V]) Start(ctx context.Context) error {
 	return s.BaseServer.Start()
 }
 
-// Shutdown gracefully stops the processing service, closes the fetcher, and the HTTP server.
 func (s *EnrichmentServiceWrapper[K, V]) Shutdown(ctx context.Context) error {
 	s.logger.Info().Msg("Shutting down enrichment server components...")
 	if err := s.enrichmentService.Stop(ctx); err != nil {

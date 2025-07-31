@@ -13,6 +13,11 @@ import (
 
 // BasicKeyExtractor extracts the enrichment key from a message attribute.
 func BasicKeyExtractor(msg *messagepipeline.Message) (string, bool) {
+	if msg.EnrichmentData != nil {
+		if deviceID, ok := msg.EnrichmentData["DeviceID"].(string); ok && deviceID != "" {
+			return deviceID, true
+		}
+	}
 	uid, ok := msg.Attributes["uid"]
 	return uid, ok
 }
