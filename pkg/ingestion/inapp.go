@@ -3,10 +3,10 @@ package ingestion
 import (
 	"context"
 	"fmt"
-	"github.com/illmade-knight/go-dataflow/pkg/enrichment"
 	"net/http"
 
 	"cloud.google.com/go/pubsub"
+	"github.com/illmade-knight/go-dataflow/pkg/enrichment"
 	"github.com/rs/zerolog"
 
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
@@ -33,19 +33,23 @@ func NewIngestionServiceWrapper(
 
 	serviceLogger := logger.With().Str("service", "IngestionService").Logger()
 
-	psClient, err := pubsub.NewClient(ctx, cfg.ProjectID, cfg.PubsubOptions...)
+	var psClient *pubsub.Client
+	var err error
+	psClient, err = pubsub.NewClient(ctx, cfg.ProjectID, cfg.PubsubOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create pubsub client: %w", err)
 	}
 
-	consumer, err := mqttconverter.NewMqttConsumer(&cfg.MQTT, serviceLogger, cfg.BufferSize)
+	var consumer *mqttconverter.MqttConsumer
+	consumer, err = mqttconverter.NewMqttConsumer(&cfg.MQTT, serviceLogger, cfg.BufferSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create MQTT consumer: %w", err)
 	}
 
 	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults()
 	producerCfg.TopicID = cfg.OutputTopicID
-	producer, err := messagepipeline.NewGooglePubsubProducer(ctx, producerCfg, psClient, serviceLogger)
+	var producer *messagepipeline.GooglePubsubProducer
+	producer, err = messagepipeline.NewGooglePubsubProducer(ctx, producerCfg, psClient, serviceLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Google Pub/Sub producer: %w", err)
 	}
@@ -57,7 +61,8 @@ func NewIngestionServiceWrapper(
 	}
 
 	// Assemble the new, non-generic EnrichmentService.
-	enrichmentService, err := enrichment.NewEnrichmentService(
+	var enrichmentService *enrichment.EnrichmentService
+	enrichmentService, err = enrichment.NewEnrichmentService(
 		enrichment.EnrichmentServiceConfig{NumWorkers: cfg.NumWorkers},
 		enricher,
 		consumer,
@@ -82,20 +87,28 @@ func NewIngestionServiceWrapper(
 	return serviceWrapper, nil
 }
 
-// Start initiates the processing service and the embedded HTTP server.
+// REFACTOR: The Start method is now non-blocking. It initializes the background
+// processing components (like MQTT consumers and workers) but does NOT start the
+// HTTP server. This change resolves a deadlock in the main application startup
+// routine by allowing the caller to control when the blocking HTTP server is started.
+//
+// Start initiates the background processing services of the ingestion pipeline.
 func (s *IngestionServiceWrapper) Start(ctx context.Context) error {
-	s.logger.Info().Msg("Starting ingestion service components...")
-	if err := s.enrichmentService.Start(ctx); err != nil {
+	s.logger.Info().Msg("Starting background ingestion components...")
+	err := s.enrichmentService.Start(ctx)
+	if err != nil {
 		s.logger.Error().Err(err).Msg("Failed to start core enrichment service")
 		return err
 	}
-	return s.BaseServer.Start()
+	s.logger.Info().Msg("Background ingestion components started successfully.")
+	return nil
 }
 
 // Shutdown gracefully stops the processing service and the HTTP server.
 func (s *IngestionServiceWrapper) Shutdown(ctx context.Context) error {
 	s.logger.Info().Msg("Shutting down ingestion server components...")
-	if err := s.enrichmentService.Stop(ctx); err != nil {
+	err := s.enrichmentService.Stop(ctx)
+	if err != nil {
 		s.logger.Warn().Err(err).Msg("Error during enrichment service shutdown")
 	} else {
 		s.logger.Info().Msg("Core enrichment service stopped.")
@@ -103,11 +116,15 @@ func (s *IngestionServiceWrapper) Shutdown(ctx context.Context) error {
 
 	// Close the pubsub client to release gRPC connections.
 	if s.pubsubClient != nil {
-		if err := s.pubsubClient.Close(); err != nil {
+		err = s.pubsubClient.Close()
+		if err != nil {
 			s.logger.Error().Err(err).Msg("Failed to close pubsub client.")
 		}
 	}
 
+	// REFACTOR: The BaseServer's Shutdown is still called here, which is correct.
+	// It ensures that even though the server is started separately in main, it is
+	// still shut down as part of the overall service's lifecycle.
 	return s.BaseServer.Shutdown(ctx)
 }
 
