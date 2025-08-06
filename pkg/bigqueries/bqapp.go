@@ -100,12 +100,19 @@ func NewBQServiceWrapper[T any](
 
 // Start initiates the BQ processing service and the embedded HTTP server.
 func (s *BQServiceWrapper[T]) Start(ctx context.Context) error {
-	s.logger.Info().Msg("Starting generic BQ server components...")
-	if err := s.batchingService.Start(ctx); err != nil {
-		return fmt.Errorf("failed to start processing service: %w", err)
+	s.logger.Info().Msg("Starting background bigquery components...")
+	err := s.batchingService.Start(ctx)
+	if err != nil {
+		s.logger.Error().Err(err).Msg("Failed to start core bigquery service")
+		return err
 	}
-	s.logger.Info().Msg("Data processing service started.")
-	return s.BaseServer.Start()
+	err = s.BaseServer.Start()
+	if err != nil {
+		s.logger.Error().Err(err).Msg("Failed to start HTTP server")
+		return err
+	}
+	s.logger.Info().Msg("Background bigquery components started successfully.")
+	return nil
 }
 
 // Shutdown gracefully stops the BQ processing service and its components.

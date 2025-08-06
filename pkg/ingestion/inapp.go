@@ -87,17 +87,17 @@ func NewIngestionServiceWrapper(
 	return serviceWrapper, nil
 }
 
-// REFACTOR: The Start method is now non-blocking. It initializes the background
-// processing components (like MQTT consumers and workers) but does NOT start the
-// HTTP server. This change resolves a deadlock in the main application startup
-// routine by allowing the caller to control when the blocking HTTP server is started.
-//
 // Start initiates the background processing services of the ingestion pipeline.
 func (s *IngestionServiceWrapper) Start(ctx context.Context) error {
 	s.logger.Info().Msg("Starting background ingestion components...")
 	err := s.enrichmentService.Start(ctx)
 	if err != nil {
 		s.logger.Error().Err(err).Msg("Failed to start core enrichment service")
+		return err
+	}
+	err = s.BaseServer.Start()
+	if err != nil {
+		s.logger.Error().Err(err).Msg("Failed to start HTTP server")
 		return err
 	}
 	s.logger.Info().Msg("Background ingestion components started successfully.")
