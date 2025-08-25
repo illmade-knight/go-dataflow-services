@@ -6,13 +6,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/illmade-knight/go-dataflow-services/pkg/bigqueries"
 	"os"
 	"testing"
 	"time"
 
 	"cloud.google.com/go/bigquery"
-	"cloud.google.com/go/pubsub"
+	"cloud.google.com/go/pubsub/v2"
+	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
+	"github.com/google/uuid"
+	"github.com/illmade-knight/go-dataflow-services/pkg/bigqueries"
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
 	"github.com/illmade-knight/go-test/emulators"
 	"github.com/rs/zerolog"
@@ -28,21 +30,47 @@ type TestPayload struct {
 	Timestamp time.Time `bigquery:"timestamp"`
 }
 
+// createPubsubResources is a test helper that encapsulates the administrative
+// task of creating and tearing down the Pub/Sub topic and subscription.
+func createPubsubResources(t *testing.T, ctx context.Context, client *pubsub.Client, projectID, topicID, subID string) {
+	t.Helper()
+	topicAdmin := client.TopicAdminClient
+	subAdmin := client.SubscriptionAdminClient
+
+	topicName := fmt.Sprintf("projects/%s/topics/%s", projectID, topicID)
+	_, err := topicAdmin.CreateTopic(ctx, &pubsubpb.Topic{Name: topicName})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = topicAdmin.DeleteTopic(context.Background(), &pubsubpb.DeleteTopicRequest{Topic: topicName})
+	})
+
+	subName := fmt.Sprintf("projects/%s/subscriptions/%s", projectID, subID)
+	_, err = subAdmin.CreateSubscription(ctx, &pubsubpb.Subscription{
+		Name:  subName,
+		Topic: topicName,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = subAdmin.DeleteSubscription(context.Background(), &pubsubpb.DeleteSubscriptionRequest{Subscription: subName})
+	})
+}
+
 func TestBQServiceWrapper_Integration(t *testing.T) {
 	testContext, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	t.Cleanup(cancel)
 
 	logger := zerolog.New(os.Stderr).Level(zerolog.InfoLevel)
-	const (
-		projectID = "bq-service-test-project"
-		topicID   = "bq-service-input-topic"
-		subID     = "bq-service-input-sub"
-		datasetID = "test_dataset"
-		tableID   = "test_table"
-	)
+	// REFACTOR: Use unique names for test resources.
+	runID := uuid.NewString()
+	const projectID = "bq-service-test-project"
+	topicID := "bq-service-input-topic-" + runID
+	subID := "bq-service-input-sub-" + runID
+	const datasetID = "test_dataset"
+	const tableID = "test_table"
 
 	// --- 1. Setup Emulators ---
-	pubsubConn := emulators.SetupPubsubEmulator(t, testContext, emulators.GetDefaultPubsubConfig(projectID, nil))
+	// REFACTOR: Use the updated GetDefaultPubsubConfig.
+	pubsubConn := emulators.SetupPubsubEmulator(t, testContext, emulators.GetDefaultPubsubConfig(projectID))
 	bqSchema := map[string]interface{}{tableID: TestPayload{}}
 	bqConn := emulators.SetupBigQueryEmulator(t, testContext, emulators.GetDefaultBigQueryConfig(projectID, map[string]string{datasetID: tableID}, bqSchema))
 
@@ -51,10 +79,8 @@ func TestBQServiceWrapper_Integration(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = psClient.Close() })
 
-	inputTopic, err := psClient.CreateTopic(testContext, topicID)
-	require.NoError(t, err)
-	_, err = psClient.CreateSubscription(testContext, subID, pubsub.SubscriptionConfig{Topic: inputTopic})
-	require.NoError(t, err)
+	// REFACTOR: Create test-specific pubsub resources.
+	createPubsubResources(t, testContext, psClient, projectID, topicID, subID)
 
 	// --- 3. Create Test Configuration ---
 	cfg := bigqueries.LoadConfigDefaults(projectID)
@@ -86,7 +112,7 @@ func TestBQServiceWrapper_Integration(t *testing.T) {
 	serviceCtx, serviceCancel := context.WithCancel(testContext)
 	t.Cleanup(serviceCancel)
 	go func() {
-		if startErr := wrapper.Start(serviceCtx); startErr != nil {
+		if startErr := wrapper.Start(serviceCtx); startErr != nil && !errors.Is(startErr, context.Canceled) {
 			t.Logf("Service Start() returned an error: %v", startErr)
 		}
 	}()
@@ -96,9 +122,12 @@ func TestBQServiceWrapper_Integration(t *testing.T) {
 		_ = wrapper.Shutdown(shutdownCtx)
 	})
 
+	// REFACTOR: Use the v2 publisher.
+	publisher := psClient.Publisher(topicID)
+	defer publisher.Stop()
 	const messageCount = 7
 	for i := 0; i < messageCount; i++ {
-		res := inputTopic.Publish(testContext, &pubsub.Message{Data: []byte(fmt.Sprintf("message-%d", i))})
+		res := publisher.Publish(testContext, &pubsub.Message{Data: []byte(fmt.Sprintf("message-%d", i))})
 		_, err = res.Get(testContext)
 		require.NoError(t, err)
 	}

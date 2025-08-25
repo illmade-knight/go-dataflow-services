@@ -6,18 +6,46 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"regexp"
 	"testing"
 	"time"
 
-	"cloud.google.com/go/pubsub"
+	"cloud.google.com/go/pubsub/v2"
+	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
+	"github.com/google/uuid"
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
 	"github.com/illmade-knight/go-test/emulators"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// createPubsubResources is a test helper that encapsulates the administrative
+// task of creating and tearing down the Pub/Sub topic and subscription.
+func createPubsubResources(t *testing.T, ctx context.Context, client *pubsub.Client, projectID, topicID, subID string) {
+	t.Helper()
+	topicAdmin := client.TopicAdminClient
+	subAdmin := client.SubscriptionAdminClient
+
+	topicName := fmt.Sprintf("projects/%s/topics/%s", projectID, topicID)
+	_, err := topicAdmin.CreateTopic(ctx, &pubsubpb.Topic{Name: topicName})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = topicAdmin.DeleteTopic(context.Background(), &pubsubpb.DeleteTopicRequest{Topic: topicName})
+	})
+
+	subName := fmt.Sprintf("projects/%s/subscriptions/%s", projectID, subID)
+	_, err = subAdmin.CreateSubscription(ctx, &pubsubpb.Subscription{
+		Name:  subName,
+		Topic: topicName,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = subAdmin.DeleteSubscription(context.Background(), &pubsubpb.DeleteSubscriptionRequest{Subscription: subName})
+	})
+}
 
 func TestIngestionServiceWrapper_Integration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -26,16 +54,23 @@ func TestIngestionServiceWrapper_Integration(t *testing.T) {
 	deviceFinder := regexp.MustCompile(`^[^/]+/([^/]+)/[^/]+$`)
 	logger := zerolog.New(os.Stderr).Level(zerolog.InfoLevel)
 
-	mqttConnection := emulators.SetupMosquittoContainer(t, ctx, emulators.GetDefaultMqttImageContainer())
-	pubsubConnection := emulators.SetupPubsubEmulator(t, ctx, emulators.GetDefaultPubsubConfig("test-project", map[string]string{"ingestion-output-topic": "ingestion-verifier-sub"}))
-
+	// REFACTOR: Use unique names for test resources.
+	runID := uuid.NewString()
 	projectID := "test-project"
+	outputTopicID := "ingestion-output-topic-" + runID
+	verifierSubID := "ingestion-verifier-sub-" + runID
+
+	mqttConnection := emulators.SetupMosquittoContainer(t, ctx, emulators.GetDefaultMqttImageContainer())
+	// REFACTOR: Use the updated GetDefaultPubsubConfig.
+	pubsubConnection := emulators.SetupPubsubEmulator(t, ctx, emulators.GetDefaultPubsubConfig(projectID))
+
 	cfg := LoadConfigDefaults(projectID)
 
 	cfg.HTTPPort = ":0"
 	cfg.MQTT.BrokerURL = mqttConnection.EmulatorAddress
 	cfg.MQTT.Topic = "devices/+/data"
-	cfg.OutputTopicID = "ingestion-output-topic"
+	cfg.OutputTopicID = outputTopicID
+	cfg.HTTPPort = ":"
 	//we don't need so many workers for our integration test
 	cfg.NumWorkers = 3
 	cfg.BufferSize = 10
@@ -84,7 +119,10 @@ func TestIngestionServiceWrapper_Integration(t *testing.T) {
 	subClient, err := pubsub.NewClient(ctx, cfg.ProjectID, pubsubConnection.ClientOptions...)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = subClient.Close() })
-	processedSub := subClient.Subscription("ingestion-verifier-sub")
+
+	// REFACTOR: Create the topic and subscription for the test.
+	createPubsubResources(t, ctx, subClient, projectID, outputTopicID, verifierSubID)
+	processedSub := subClient.Subscriber(verifierSubID)
 
 	t.Run("Publish MQTT and Verify PubSub Output", func(t *testing.T) {
 		require.Eventually(t, func() bool {
@@ -110,7 +148,10 @@ func TestIngestionServiceWrapper_Integration(t *testing.T) {
 			pullCancel()
 		})
 
-		require.NoError(t, err, "Receiving from Pub/Sub should not fail")
+		// REFACTOR: The context is always cancelled by the receive callback, so we only check for other errors.
+		if err != nil && !errors.Is(err, context.Canceled) {
+			require.NoError(t, err, "Receiving from Pub/Sub failed")
+		}
 		require.NotNil(t, receivedMsg, "Did not receive a message from Pub/Sub")
 
 		var result messagepipeline.MessageData

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"cloud.google.com/go/pubsub"
+	"cloud.google.com/go/pubsub/v2"
 	"github.com/illmade-knight/go-dataflow/pkg/cache"
 	"github.com/illmade-knight/go-dataflow/pkg/enrichment"
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
@@ -52,16 +52,14 @@ func NewEnrichmentServiceWrapper[K comparable, V any](
 		return nil, fmt.Errorf("failed to create pubsub client: %w", err)
 	}
 
-	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults()
-	consumerCfg.SubscriptionID = cfg.InputSubscriptionID
-	consumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, consumerCfg, psClient, enrichmentLogger)
+	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults(cfg.InputSubscriptionID)
+	consumer, err := messagepipeline.NewGooglePubsubConsumer(consumerCfg, psClient, enrichmentLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create consumer: %w", err)
 	}
 
-	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults()
-	producerCfg.TopicID = cfg.OutputTopicID
-	mainProducer, err := messagepipeline.NewGooglePubsubProducer(ctx, producerCfg, psClient, enrichmentLogger)
+	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults(cfg.OutputTopicID)
+	mainProducer, err := messagepipeline.NewGooglePubsubProducer(producerCfg, psClient, enrichmentLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create producer: %w", err)
 	}

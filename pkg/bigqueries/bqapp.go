@@ -1,10 +1,11 @@
 package bigqueries
 
 import (
-	"cloud.google.com/go/bigquery"
-	"cloud.google.com/go/pubsub"
 	"context"
 	"fmt"
+
+	"cloud.google.com/go/bigquery"
+	"cloud.google.com/go/pubsub/v2"
 	"github.com/illmade-knight/go-dataflow/pkg/bqstore"
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
 	"github.com/illmade-knight/go-dataflow/pkg/microservice"
@@ -64,9 +65,8 @@ func NewBQServiceWrapper[T any](
 	}
 
 	// 2. Create the pipeline components.
-	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults()
-	consumerCfg.SubscriptionID = cfg.InputSubscriptionID
-	consumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, consumerCfg, psClient, logger)
+	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults(cfg.InputSubscriptionID)
+	consumer, err := messagepipeline.NewGooglePubsubConsumer(consumerCfg, psClient, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Pub/Sub consumer: %w", err)
 	}

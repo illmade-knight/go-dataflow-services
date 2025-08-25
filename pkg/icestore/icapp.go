@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"cloud.google.com/go/pubsub"
+	"cloud.google.com/go/pubsub/v2"
 	"cloud.google.com/go/storage"
 	"github.com/illmade-knight/go-dataflow/pkg/icestore"
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
@@ -58,9 +58,8 @@ func NewIceStoreServiceWrapper(
 		return nil, fmt.Errorf("failed to create pubsub client: %w", err)
 	}
 
-	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults()
-	consumerCfg.SubscriptionID = cfg.InputSubscriptionID
-	consumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, consumerCfg, psClient, logger)
+	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults(cfg.InputSubscriptionID)
+	consumer, err := messagepipeline.NewGooglePubsubConsumer(consumerCfg, psClient, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Pub/Sub consumer: %w", err)
 	}
