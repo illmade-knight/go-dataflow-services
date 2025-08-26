@@ -7,12 +7,11 @@ toolchain go1.24.6
 require (
 	cloud.google.com/go/bigquery v1.69.0
 	cloud.google.com/go/firestore v1.18.0
-	cloud.google.com/go/pubsub v1.50.0
 	cloud.google.com/go/pubsub/v2 v2.0.0
 	cloud.google.com/go/storage v1.56.1
 	github.com/google/uuid v1.6.0
-	github.com/illmade-knight/go-dataflow v0.3.0-beta
-	github.com/illmade-knight/go-test v0.0.4-beta
+	github.com/illmade-knight/go-dataflow v0.3.1-beta
+	github.com/illmade-knight/go-test v0.0.6-beta
 	github.com/rs/zerolog v1.34.0
 	github.com/stretchr/testify v1.11.0
 	google.golang.org/api v0.248.0

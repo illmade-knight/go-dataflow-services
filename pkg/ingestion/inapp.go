@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"cloud.google.com/go/pubsub"
+	"cloud.google.com/go/pubsub/v2"
 	"github.com/illmade-knight/go-dataflow/pkg/enrichment"
 	"github.com/rs/zerolog"
 
@@ -46,10 +46,9 @@ func NewIngestionServiceWrapper(
 		return nil, fmt.Errorf("failed to create MQTT consumer: %w", err)
 	}
 
-	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults()
-	producerCfg.TopicID = cfg.OutputTopicID
+	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults(cfg.OutputTopicID)
 	var producer *messagepipeline.GooglePubsubProducer
-	producer, err = messagepipeline.NewGooglePubsubProducer(ctx, producerCfg, psClient, serviceLogger)
+	producer, err = messagepipeline.NewGooglePubsubProducer(producerCfg, psClient, serviceLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Google Pub/Sub producer: %w", err)
 	}
