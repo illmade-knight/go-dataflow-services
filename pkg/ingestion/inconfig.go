@@ -23,12 +23,12 @@ type RoutingConfig struct {
 
 // Config is the main configuration structure for the ingestion service.
 type Config struct {
-	BaseConfig    microservice.BaseConfig        `json:"baseConfig"`
-	BufferSize    int                            `json:"bufferSize"`
-	NumWorkers    int                            `json:"numWorkers"`
-	HTTPPort      string                         `json:"httpPort"`
-	PubsubOptions []option.ClientOption          `json:"-"` // Loaded programmatically
-	MQTT          mqttconverter.MQTTClientConfig `json:"mqtt"`
+	microservice.BaseConfig `json:"baseConfig"`
+	BufferSize              int                            `json:"bufferSize"`
+	NumWorkers              int                            `json:"numWorkers"`
+	HTTPPort                string                         `json:"httpPort"`
+	PubsubOptions           []option.ClientOption          `json:"-"` // Loaded programmatically
+	MQTT                    mqttconverter.MQTTClientConfig `json:"mqtt"`
 
 	// Routing maps a logical route name (e.g., "uplinks") to its source MQTT topic config.
 	Routing map[string]RoutingConfig `json:"routing"`
