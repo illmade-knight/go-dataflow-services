@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"regexp"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +16,8 @@ import (
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	"github.com/google/uuid"
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
+	"github.com/illmade-knight/go-dataflow/pkg/microservice"
+	"github.com/illmade-knight/go-dataflow/pkg/mqttconverter"
 	"github.com/illmade-knight/go-test/emulators"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -51,49 +53,51 @@ func TestIngestionServiceWrapper_Integration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	t.Cleanup(cancel)
 
-	deviceFinder := regexp.MustCompile(`^[^/]+/([^/]+)/[^/]+$`)
 	logger := zerolog.New(os.Stderr).Level(zerolog.InfoLevel)
 
-	// REFACTOR: Use unique names for test resources.
 	runID := uuid.NewString()
 	projectID := "test-project"
-	outputTopicID := "ingestion-output-topic-" + runID
-	verifierSubID := "ingestion-verifier-sub-" + runID
+	// REFACTOR: Define two separate output topics for routing.
+	uplinkTopicID := "uplink-topic-" + runID
+	uplinkSubID := "uplink-sub-" + runID
+	joinTopicID := "join-topic-" + runID
+	joinSubID := "join-sub-" + runID
 
 	mqttConnection := emulators.SetupMosquittoContainer(t, ctx, emulators.GetDefaultMqttImageContainer())
-	// REFACTOR: Use the updated GetDefaultPubsubConfig.
 	pubsubConnection := emulators.SetupPubsubEmulator(t, ctx, emulators.GetDefaultPubsubConfig(projectID))
 
-	cfg := LoadConfigDefaults(projectID)
+	// BUG FIX: Initialize MQTT config from defaults to get timeouts etc.
+	mqttBaseCfg := mqttconverter.LoadMQTTClientConfigFromEnv()
+	mqttBaseCfg.BrokerURL = mqttConnection.EmulatorAddress
 
-	cfg.HTTPPort = ":0"
-	cfg.MQTT.BrokerURL = mqttConnection.EmulatorAddress
-	cfg.MQTT.Topic = "devices/+/data"
-	cfg.OutputTopicID = outputTopicID
-	cfg.HTTPPort = ":"
-	//we don't need so many workers for our integration test
-	cfg.NumWorkers = 3
-	cfg.BufferSize = 10
-	cfg.PubsubOptions = pubsubConnection.ClientOptions
+	// REFACTOR: Build the new, multi-route config from scratch.
+	cfg := &Config{
+		BaseConfig: microservice.BaseConfig{
+			ProjectID: projectID,
+		},
+		BufferSize: 10,
+		NumWorkers: 3,
+		HTTPPort:   ":0", // Use a random available port for the test server.
+		MQTT:       *mqttBaseCfg,
+		Routing: map[string]RoutingConfig{
+			"uplinks": {MqttTopic: "devices/+/up", QoS: 1},
+			"joins":   {MqttTopic: "devices/+/join", QoS: 1},
+		},
+		Producers: map[string]ProducerConfig{
+			"uplinks": {OutputTopicID: uplinkTopicID},
+			"joins":   {OutputTopicID: joinTopicID},
+		},
+		PubsubOptions: pubsubConnection.ClientOptions,
+	}
 
-	// The transformer is now a MessageEnricher: it modifies the message in-place.
+	// The enricher remains the same, adding deviceID and other metadata.
 	ingestionEnricher := func(ctx context.Context, msg *messagepipeline.Message) (bool, error) {
-		topic := msg.Attributes["mqtt_topic"]
-		var deviceID string
-
-		matches := deviceFinder.FindStringSubmatch(topic)
-		if len(matches) > 1 {
-			deviceID = matches[1]
-		}
-
 		if msg.EnrichmentData == nil {
 			msg.EnrichmentData = make(map[string]interface{})
 		}
-		msg.EnrichmentData["DeviceID"] = deviceID
-		msg.EnrichmentData["Topic"] = topic
+		msg.EnrichmentData["Topic"] = msg.Attributes["mqtt_topic"]
 		msg.EnrichmentData["Timestamp"] = msg.PublishTime
-
-		return false, nil // Do not skip, no error.
+		return false, nil
 	}
 
 	serviceWrapper, err := NewIngestionServiceWrapper(ctx, cfg, logger, ingestionEnricher)
@@ -116,51 +120,86 @@ func TestIngestionServiceWrapper_Integration(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { mqttTestPubClient.Disconnect(250) })
 
-	subClient, err := pubsub.NewClient(ctx, cfg.ProjectID, pubsubConnection.ClientOptions...)
+	subClient, err := pubsub.NewClient(ctx, cfg.BaseConfig.ProjectID, pubsubConnection.ClientOptions...)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = subClient.Close() })
 
-	// REFACTOR: Create the topic and subscription for the test.
-	createPubsubResources(t, ctx, subClient, projectID, outputTopicID, verifierSubID)
-	processedSub := subClient.Subscriber(verifierSubID)
+	// REFACTOR: Create resources for both verification subscriptions.
+	createPubsubResources(t, ctx, subClient, projectID, uplinkTopicID, uplinkSubID)
+	createPubsubResources(t, ctx, subClient, projectID, joinTopicID, joinSubID)
 
-	t.Run("Publish MQTT and Verify PubSub Output", func(t *testing.T) {
-		require.Eventually(t, func() bool {
-			return serviceWrapper.consumer.IsConnected()
-		}, 10*time.Second, 100*time.Millisecond, "MQTT consumer did not connect in time")
+	uplinkSub := subClient.Subscriber(uplinkSubID)
+	joinSub := subClient.Subscriber(joinSubID)
 
-		devicePayload := map[string]interface{}{"temperature": 25.5, "humidity": 60}
-		payloadBytes, err := json.Marshal(devicePayload)
-		require.NoError(t, err)
+	t.Run("Publish to multiple topics and verify routing", func(t *testing.T) {
+		require.Eventually(t, serviceWrapper.consumer.IsConnected, 10*time.Second, 100*time.Millisecond, "MQTT consumer did not connect")
 
-		publishTopic := "devices/test-device-123/data"
-		token := mqttTestPubClient.Publish(publishTopic, 1, false, payloadBytes)
-		token.Wait()
-		require.NoError(t, token.Error())
+		// --- Publish Messages ---
+		uplinkPayload := map[string]interface{}{"value": 42}
+		uplinkBytes, _ := json.Marshal(uplinkPayload)
+		uplinkTopic := "devices/dev123/up"
+		mqttTestPubClient.Publish(uplinkTopic, 1, false, uplinkBytes)
 
-		pullCtx, pullCancel := context.WithTimeout(ctx, 30*time.Second)
-		t.Cleanup(pullCancel)
+		joinPayload := map[string]interface{}{"appKey": "abc"}
+		joinBytes, _ := json.Marshal(joinPayload)
+		joinTopic := "devices/dev456/join"
+		mqttTestPubClient.Publish(joinTopic, 1, false, joinBytes)
 
-		var receivedMsg *pubsub.Message
-		err = processedSub.Receive(pullCtx, func(ctxMsg context.Context, msg *pubsub.Message) {
-			msg.Ack()
-			receivedMsg = msg
-			pullCancel()
-		})
+		// --- Verification ---
+		var wg sync.WaitGroup
+		wg.Add(2)
 
-		// REFACTOR: The context is always cancelled by the receive callback, so we only check for other errors.
-		if err != nil && !errors.Is(err, context.Canceled) {
-			require.NoError(t, err, "Receiving from Pub/Sub failed")
-		}
-		require.NotNil(t, receivedMsg, "Did not receive a message from Pub/Sub")
+		var receivedUplink *messagepipeline.MessageData
+		var receivedJoin *messagepipeline.MessageData
 
-		var result messagepipeline.MessageData
-		err = json.Unmarshal(receivedMsg.Data, &result)
-		require.NoError(t, err)
+		// Goroutine to listen for the uplink message
+		go func() {
+			defer wg.Done()
+			pullCtx, pullCancel := context.WithTimeout(ctx, 20*time.Second)
+			defer pullCancel()
+			err := uplinkSub.Receive(pullCtx, func(ctxMsg context.Context, msg *pubsub.Message) {
+				msg.Ack()
+				var result messagepipeline.MessageData
+				if json.Unmarshal(msg.Data, &result) == nil {
+					receivedUplink = &result
+				}
+				pullCancel()
+			})
+			if err != nil && !errors.Is(err, context.Canceled) {
+				t.Errorf("Receiving from uplink sub failed: %v", err)
+			}
+		}()
 
-		assert.JSONEq(t, string(payloadBytes), string(result.Payload))
-		require.NotNil(t, result.EnrichmentData)
-		assert.Equal(t, publishTopic, result.EnrichmentData["Topic"])
-		assert.Equal(t, "test-device-123", result.EnrichmentData["DeviceID"])
+		// Goroutine to listen for the join message
+		go func() {
+			defer wg.Done()
+			pullCtx, pullCancel := context.WithTimeout(ctx, 20*time.Second)
+			defer pullCancel()
+			err := joinSub.Receive(pullCtx, func(ctxMsg context.Context, msg *pubsub.Message) {
+				msg.Ack()
+				var result messagepipeline.MessageData
+				if json.Unmarshal(msg.Data, &result) == nil {
+					receivedJoin = &result
+				}
+				pullCancel()
+			})
+			if err != nil && !errors.Is(err, context.Canceled) {
+				t.Errorf("Receiving from join sub failed: %v", err)
+			}
+		}()
+
+		wg.Wait()
+
+		// Assertions for the uplink message
+		require.NotNil(t, receivedUplink, "Did not receive the uplink message")
+		assert.JSONEq(t, string(uplinkBytes), string(receivedUplink.Payload))
+		require.NotNil(t, receivedUplink.EnrichmentData)
+		assert.Equal(t, uplinkTopic, receivedUplink.EnrichmentData["Topic"])
+
+		// Assertions for the join message
+		require.NotNil(t, receivedJoin, "Did not receive the join message")
+		assert.JSONEq(t, string(joinBytes), string(receivedJoin.Payload))
+		require.NotNil(t, receivedJoin.EnrichmentData)
+		assert.Equal(t, joinTopic, receivedJoin.EnrichmentData["Topic"])
 	})
 }

@@ -21,9 +21,11 @@ type IngestionServiceWrapper struct {
 	enrichmentService *enrichment.EnrichmentService
 	logger            zerolog.Logger
 	pubsubClient      *pubsub.Client
+	// REFACTOR: Store a map of producers, keyed by route name.
+	producers map[string]*messagepipeline.GooglePubsubProducer
 }
 
-// NewIngestionServiceWrapper assembles the full ingestion pipeline.
+// NewIngestionServiceWrapper assembles the full ingestion pipeline with dynamic routing.
 func NewIngestionServiceWrapper(
 	ctx context.Context,
 	cfg *Config,
@@ -33,35 +35,65 @@ func NewIngestionServiceWrapper(
 
 	serviceLogger := logger.With().Str("service", "IngestionService").Logger()
 
-	var psClient *pubsub.Client
-	var err error
-	psClient, err = pubsub.NewClient(ctx, cfg.ProjectID, cfg.PubsubOptions...)
+	psClient, err := pubsub.NewClient(ctx, cfg.BaseConfig.ProjectID, cfg.PubsubOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create pubsub client: %w", err)
 	}
 
-	var consumer *mqttconverter.MqttConsumer
-	consumer, err = mqttconverter.NewMqttConsumer(&cfg.MQTT, serviceLogger, cfg.BufferSize)
+	// REFACTOR: Dynamically build TopicMappings from the routing configuration.
+	if len(cfg.Routing) == 0 {
+		return nil, fmt.Errorf("no routes defined in the configuration")
+	}
+	topicMappings := make([]mqttconverter.TopicMapping, 0, len(cfg.Routing))
+	for routeName, routeCfg := range cfg.Routing {
+		topicMappings = append(topicMappings, mqttconverter.TopicMapping{
+			Name:  routeName,
+			Topic: routeCfg.MqttTopic,
+			QoS:   routeCfg.QoS,
+		})
+	}
+	// The core MQTT client config is still used, but we overwrite the TopicMappings.
+	mqttCfg := cfg.MQTT
+	mqttCfg.TopicMappings = topicMappings
+
+	consumer, err := mqttconverter.NewMqttConsumer(&mqttCfg, serviceLogger, cfg.BufferSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create MQTT consumer: %w", err)
 	}
 
-	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults(cfg.OutputTopicID)
-	var producer *messagepipeline.GooglePubsubProducer
-	producer, err = messagepipeline.NewGooglePubsubProducer(producerCfg, psClient, serviceLogger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Google Pub/Sub producer: %w", err)
+	// REFACTOR: Create a producer for each configured route destination.
+	producers := make(map[string]*messagepipeline.GooglePubsubProducer)
+	for routeName, producerCfg := range cfg.Producers {
+		// Ensure every producer destination has a corresponding route source.
+		if _, ok := cfg.Routing[routeName]; !ok {
+			return nil, fmt.Errorf("producer defined for route '%s' but no corresponding routing rule exists", routeName)
+		}
+		pubsubProducerCfg := messagepipeline.NewGooglePubsubProducerDefaults(producerCfg.OutputTopicID)
+		producer, err := messagepipeline.NewGooglePubsubProducer(pubsubProducerCfg, psClient, serviceLogger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create producer for route '%s' (topic: %s): %w", routeName, producerCfg.OutputTopicID, err)
+		}
+		producers[routeName] = producer
+		serviceLogger.Info().Str("route", routeName).Str("topic", producerCfg.OutputTopicID).Msg("Initialized producer for route")
 	}
 
-	// Define the final processing step: publish the (now enriched) message.
+	// REFACTOR: The processor is now a "smart router".
 	processor := func(ctx context.Context, msg *messagepipeline.Message) error {
+		routeName, ok := msg.Attributes["route_name"]
+		if !ok {
+			return fmt.Errorf("message %s is missing 'route_name' attribute for routing", msg.ID)
+		}
+
+		producer, ok := producers[routeName]
+		if !ok {
+			return fmt.Errorf("no producer configured for route: '%s'", routeName)
+		}
+
 		_, err := producer.Publish(ctx, msg.MessageData)
 		return err
 	}
 
-	// Assemble the new, non-generic EnrichmentService.
-	var enrichmentService *enrichment.EnrichmentService
-	enrichmentService, err = enrichment.NewEnrichmentService(
+	enrichmentService, err := enrichment.NewEnrichmentService(
 		enrichment.EnrichmentServiceConfig{NumWorkers: cfg.NumWorkers},
 		enricher,
 		consumer,
@@ -80,6 +112,7 @@ func NewIngestionServiceWrapper(
 		enrichmentService: enrichmentService,
 		logger:            serviceLogger,
 		pubsubClient:      psClient,
+		producers:         producers, // Store the map of producers.
 	}
 
 	serviceWrapper.registerHandlers()
@@ -103,7 +136,7 @@ func (s *IngestionServiceWrapper) Start(ctx context.Context) error {
 	return nil
 }
 
-// Shutdown gracefully stops the processing service and the HTTP server.
+// Shutdown gracefully stops the processing service and all producers.
 func (s *IngestionServiceWrapper) Shutdown(ctx context.Context) error {
 	s.logger.Info().Msg("Shutting down ingestion server components...")
 	err := s.enrichmentService.Stop(ctx)
@@ -113,7 +146,14 @@ func (s *IngestionServiceWrapper) Shutdown(ctx context.Context) error {
 		s.logger.Info().Msg("Core enrichment service stopped.")
 	}
 
-	// Close the pubsub client to release gRPC connections.
+	// REFACTOR: Stop all configured producers.
+	for routeName, producer := range s.producers {
+		s.logger.Info().Str("route", routeName).Msg("Stopping producer...")
+		if pErr := producer.Stop(ctx); pErr != nil {
+			s.logger.Warn().Err(pErr).Str("route", routeName).Msg("Error stopping producer")
+		}
+	}
+
 	if s.pubsubClient != nil {
 		err = s.pubsubClient.Close()
 		if err != nil {
@@ -121,9 +161,6 @@ func (s *IngestionServiceWrapper) Shutdown(ctx context.Context) error {
 		}
 	}
 
-	// REFACTOR: The BaseServer's Shutdown is still called here, which is correct.
-	// It ensures that even though the server is started separately in main, it is
-	// still shut down as part of the overall service's lifecycle.
 	return s.BaseServer.Shutdown(ctx)
 }
 
