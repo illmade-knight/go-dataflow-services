@@ -16,13 +16,29 @@ import (
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	"github.com/google/uuid"
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
-	"github.com/illmade-knight/go-dataflow/pkg/microservice"
-	"github.com/illmade-knight/go-dataflow/pkg/mqttconverter"
 	"github.com/illmade-knight/go-test/emulators"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// demoYaml provides the declarative routing configuration for the test,
+// mapping MQTT topics to logical producer routes.
+const demoYaml = `
+routes:
+  uplink-route-config:
+    source:
+      mqtt_topic: "devices/+/up"
+      qos: 1
+    destination:
+      route_name: "uplinks"
+  join-route-config:
+    source:
+      mqtt_topic: "devices/+/join"
+      qos: 1
+    destination:
+      route_name: "joins"
+`
 
 // createPubsubResources is a test helper that encapsulates the administrative
 // task of creating and tearing down the Pub/Sub topic and subscription.
@@ -57,7 +73,6 @@ func TestIngestionServiceWrapper_Integration(t *testing.T) {
 
 	runID := uuid.NewString()
 	projectID := "test-project"
-	// REFACTOR: Define two separate output topics for routing.
 	uplinkTopicID := "uplink-topic-" + runID
 	uplinkSubID := "uplink-sub-" + runID
 	joinTopicID := "join-topic-" + runID
@@ -66,29 +81,35 @@ func TestIngestionServiceWrapper_Integration(t *testing.T) {
 	mqttConnection := emulators.SetupMosquittoContainer(t, ctx, emulators.GetDefaultMqttImageContainer())
 	pubsubConnection := emulators.SetupPubsubEmulator(t, ctx, emulators.GetDefaultPubsubConfig(projectID))
 
-	// BUG FIX: Initialize MQTT config from defaults to get timeouts etc.
-	mqttBaseCfg := mqttconverter.LoadMQTTClientConfigFromEnv()
-	mqttBaseCfg.BrokerURL = mqttConnection.EmulatorAddress
+	// --- Configuration Setup ---
+	// 1. Create a temporary routes.yaml for the test.
+	tmpFile, err := os.CreateTemp("", "routes-*.yaml")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.Remove(tmpFile.Name()) })
+	_, err = tmpFile.WriteString(demoYaml)
+	require.NoError(t, err)
+	err = tmpFile.Close()
+	require.NoError(t, err)
 
-	// REFACTOR: Build the new, multi-route config from scratch.
-	cfg := &Config{
-		BaseConfig: microservice.BaseConfig{
-			ProjectID: projectID,
-		},
-		BufferSize: 10,
-		NumWorkers: 3,
-		HTTPPort:   ":0", // Use a random available port for the test server.
-		MQTT:       *mqttBaseCfg,
-		Routing: map[string]RoutingConfig{
-			"uplinks": {MqttTopic: "devices/+/up", QoS: 1},
-			"joins":   {MqttTopic: "devices/+/join", QoS: 1},
-		},
-		Producers: map[string]ProducerConfig{
-			"uplinks": {OutputTopicID: uplinkTopicID},
-			"joins":   {OutputTopicID: joinTopicID},
-		},
-		PubsubOptions: pubsubConnection.ClientOptions,
+	// 2. Initialize the base config.
+	cfg := LoadConfigDefaults(projectID)
+	cfg.HTTPPort = ":0" // Use a random available port.
+	cfg.MQTT.BrokerURL = mqttConnection.EmulatorAddress
+	cfg.PubsubOptions = pubsubConnection.ClientOptions
+
+	// 3. Load routes from the temporary YAML file.
+	destinationRouteNames, err := LoadRoutesFromYAML(tmpFile.Name(), cfg)
+	require.NoError(t, err)
+
+	// 4. Define the producers for the test.
+	cfg.Producers = map[string]ProducerConfig{
+		"uplinks": {OutputTopicID: uplinkTopicID},
+		"joins":   {OutputTopicID: joinTopicID},
 	}
+
+	// 5. Partially test the validation logic.
+	err = ValidateRoutingAndProducers(cfg.Producers, destinationRouteNames)
+	require.NoError(t, err, "Validation of routes and producers should pass")
 
 	// The enricher remains the same, adding deviceID and other metadata.
 	ingestionEnricher := func(ctx context.Context, msg *messagepipeline.Message) (bool, error) {
@@ -124,7 +145,6 @@ func TestIngestionServiceWrapper_Integration(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = subClient.Close() })
 
-	// REFACTOR: Create resources for both verification subscriptions.
 	createPubsubResources(t, ctx, subClient, projectID, uplinkTopicID, uplinkSubID)
 	createPubsubResources(t, ctx, subClient, projectID, joinTopicID, joinSubID)
 
@@ -152,7 +172,6 @@ func TestIngestionServiceWrapper_Integration(t *testing.T) {
 		var receivedUplink *messagepipeline.MessageData
 		var receivedJoin *messagepipeline.MessageData
 
-		// Goroutine to listen for the uplink message
 		go func() {
 			defer wg.Done()
 			pullCtx, pullCancel := context.WithTimeout(ctx, 20*time.Second)
@@ -170,7 +189,6 @@ func TestIngestionServiceWrapper_Integration(t *testing.T) {
 			}
 		}()
 
-		// Goroutine to listen for the join message
 		go func() {
 			defer wg.Done()
 			pullCtx, pullCancel := context.WithTimeout(ctx, 20*time.Second)
@@ -190,13 +208,11 @@ func TestIngestionServiceWrapper_Integration(t *testing.T) {
 
 		wg.Wait()
 
-		// Assertions for the uplink message
 		require.NotNil(t, receivedUplink, "Did not receive the uplink message")
 		assert.JSONEq(t, string(uplinkBytes), string(receivedUplink.Payload))
 		require.NotNil(t, receivedUplink.EnrichmentData)
 		assert.Equal(t, uplinkTopic, receivedUplink.EnrichmentData["Topic"])
 
-		// Assertions for the join message
 		require.NotNil(t, receivedJoin, "Did not receive the join message")
 		assert.JSONEq(t, string(joinBytes), string(receivedJoin.Payload))
 		require.NotNil(t, receivedJoin.EnrichmentData)

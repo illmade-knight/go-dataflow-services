@@ -19,6 +19,9 @@ type RoutingConfig struct {
 	MqttTopic string `json:"mqttTopic"`
 	// QoS is the quality of service for the MQTT subscription.
 	QoS byte `json:"qos"`
+	// REFACTOR: Add this field to hold the parsed destination name.
+	// DestinationRouteName is the logical name of the producer this route maps to.
+	DestinationRouteName string `json:"destinationRouteName"`
 }
 
 // Config is the main configuration structure for the ingestion service.
@@ -48,7 +51,7 @@ func LoadConfigDefaults(projectID string) *Config {
 		BufferSize: 1000,
 	}
 
-	mqttCfg := mqttconverter.LoadMQTTClientConfigFromEnv()
+	mqttCfg := mqttconverter.LoadMQTTClientConfigWithEnv()
 	cfg.MQTT = *mqttCfg
 
 	return cfg
