@@ -40,7 +40,7 @@ type Config struct {
 	Producers map[string]ProducerConfig `json:"producers"`
 }
 
-// // LoadConfigDefaults initializes and loads configuration.
+// LoadConfigDefaults initializes and loads configuration.
 func LoadConfigDefaults(projectID string) *Config {
 	cfg := &Config{
 		BaseConfig: microservice.BaseConfig{

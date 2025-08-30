@@ -85,7 +85,7 @@ func TestIngestionServiceWrapper_Integration(t *testing.T) {
 	// 1. Create a temporary routes.yaml for the test.
 	tmpFile, err := os.CreateTemp("", "routes-*.yaml")
 	require.NoError(t, err)
-	t.Cleanup(func() { os.Remove(tmpFile.Name()) })
+	t.Cleanup(func() { _ = os.Remove(tmpFile.Name()) })
 	_, err = tmpFile.WriteString(demoYaml)
 	require.NoError(t, err)
 	err = tmpFile.Close()
